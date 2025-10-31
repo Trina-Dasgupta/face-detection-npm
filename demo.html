@@ -185,66 +185,162 @@
 
         // Start scanning
         async function startScanning() {
-            if (!scanner || isScanning) return;
-            
+            if (isScanning) return;
+
             isScanning = true;
             scanBtn.disabled = true;
             stopBtn.disabled = false;
             status.textContent = 'Scanning for faces...';
-            
-            stopScanning = await scanner.scanFaceContinuously(
-                video, 
-                (result) => {
-                    // Clear canvas
-                    ctx.clearRect(0, 0, canvas.width, canvas.height);
-                    
-                    if (result.faceDetected) {
-                        status.textContent = '✅ ' + result.message;
-                        status.style.color = 'green';
-                        
-                        // Draw landmarks
-                        if (result.landmarks) {
-                            FaceScannerJS.ImageUtils.drawLandmarks(canvas, result.landmarks, {
-                                pointColor: '#00ff00',
-                                lineColor: '#ff00ff',
-                                pointSize: 2,
-                                lineWidth: 1
-                            });
+
+            // Try using local Python analyzer first. If it's not reachable, fall back to the
+            // bundled JS FaceScanner continuous scanning.
+            const pythonEndpoint = 'http://localhost:5000/analyze';
+            let pythonAvailable = false;
+
+            try {
+                const ping = await fetch(pythonEndpoint, { method: 'OPTIONS' });
+                pythonAvailable = ping && (ping.status === 200 || ping.status === 204 || ping.status === 1223 || ping.status === 0);
+            } catch (e) {
+                pythonAvailable = false;
+            }
+
+            if (pythonAvailable) {
+                // Poll and send frames to Python analyzer every 300ms
+                stopScanning = setInterval(async () => {
+                    try {
+                        // Draw current video frame to the overlaid canvas and capture base64
+                        ctx.clearRect(0, 0, canvas.width, canvas.height);
+                        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                        const base64 = canvas.toDataURL('image/jpeg', 0.9);
+
+                        const resp = await fetch(pythonEndpoint, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ image: base64 })
+                        });
+
+                        if (!resp.ok) throw new Error('Analyzer error: ' + resp.status);
+                        const analysis = await resp.json();
+
+                        // Clear canvas overlay before drawing landmarks
+                        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                        if (analysis.is_visible) {
+                            status.textContent = '✅ Face properly detected and captured';
+                            status.style.color = 'green';
+
+                            // Draw landmarks if provided
+                            if (analysis.landmarks && Array.isArray(analysis.landmarks)) {
+                                FaceScannerJS.ImageUtils.drawLandmarks(canvas, analysis.landmarks, {
+                                    pointColor: '#00ff00',
+                                    lineColor: '#00ff00',
+                                    pointSize: 2,
+                                    lineWidth: 1
+                                });
+                            }
+
+                            details.textContent = JSON.stringify({
+                                faceDetected: true,
+                                score: analysis.score,
+                                issues: analysis.issues,
+                                details: analysis.details
+                            }, null, 2);
+
+                            // Auto-capture: show or use the captured base64 image
+                            // (we already captured it above)
+                            console.log('Captured base64 length:', base64.length);
+
+                        } else {
+                            status.textContent = '❌ ' + (analysis.message || 'Face not properly visible');
+                            status.style.color = 'red';
+
+                            // Draw landmarks if available to indicate what's seen
+                            if (analysis.landmarks && Array.isArray(analysis.landmarks)) {
+                                FaceScannerJS.ImageUtils.drawLandmarks(canvas, analysis.landmarks, {
+                                    pointColor: '#ff0000',
+                                    lineColor: '#ff0000',
+                                    pointSize: 1,
+                                    lineWidth: 1
+                                });
+                            }
+
+                            details.textContent = JSON.stringify({
+                                faceDetected: false,
+                                message: analysis.message,
+                                issues: analysis.issues || [],
+                                details: analysis.details || {}
+                            }, null, 2);
                         }
-                        
-                        // Update details
-                        details.textContent = JSON.stringify({
-                            faceDetected: true,
-                            visibilityScore: result.visibilityScore,
-                            boundingBox: result.boundingBox,
-                            imageData: result.base64Image ? 'Base64 image captured (' + result.base64Image.length + ' chars)' : 'No image'
-                        }, null, 2);
-                        
-                        console.log('Captured face image length:', result.base64Image?.length);
-                        
-                    } else {
-                        status.textContent = '❌ ' + result.message;
-                        status.style.color = 'red';
-                        
-                        // Draw landmarks even if not perfect for debugging
-                        if (result.landmarks) {
-                            FaceScannerJS.ImageUtils.drawLandmarks(canvas, result.landmarks, {
-                                pointColor: '#ff0000',
-                                lineColor: '#ff0000',
-                                pointSize: 1,
-                                lineWidth: 1
-                            });
-                        }
-                        
-                        details.textContent = JSON.stringify({
-                            faceDetected: false,
-                            message: result.message,
-                            landmarks: result.landmarks ? 'Available' : 'None'
-                        }, null, 2);
+
+                    } catch (err) {
+                        console.error('Python analyzer error, falling back to JS detector:', err);
+                        // Stop Python polling and fall back to JS detector
+                        clearInterval(stopScanning);
+                        stopScanning = null;
+                        // Re-enter startScanning to pick the JS path
+                        isScanning = false;
+                        startScanning();
                     }
-                },
-                300 // Scan every 300ms
-            );
+                }, 300);
+
+            } else {
+                // Fallback: use bundled JS FaceScanner continuous scanning
+                if (!scanner) {
+                    status.textContent = 'Scanner not initialized';
+                    return;
+                }
+
+                stopScanning = await scanner.scanFaceContinuously(
+                    video,
+                    (result) => {
+                        // Clear canvas
+                        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                        if (result.faceDetected) {
+                            status.textContent = '✅ ' + result.message;
+                            status.style.color = 'green';
+
+                            // Draw landmarks
+                            if (result.landmarks) {
+                                FaceScannerJS.ImageUtils.drawLandmarks(canvas, result.landmarks, {
+                                    pointColor: '#00ff00',
+                                    lineColor: '#ff00ff',
+                                    pointSize: 2,
+                                    lineWidth: 1
+                                });
+                            }
+
+                            // Update details
+                            details.textContent = JSON.stringify({
+                                faceDetected: true,
+                                visibilityScore: result.visibilityScore,
+                                boundingBox: result.boundingBox,
+                                imageData: result.base64Image ? 'Base64 image captured (' + result.base64Image.length + ' chars)' : 'No image'
+                            }, null, 2);
+
+                        } else {
+                            status.textContent = '❌ ' + result.message;
+                            status.style.color = 'red';
+
+                            if (result.landmarks) {
+                                FaceScannerJS.ImageUtils.drawLandmarks(canvas, result.landmarks, {
+                                    pointColor: '#ff0000',
+                                    lineColor: '#ff0000',
+                                    pointSize: 1,
+                                    lineWidth: 1
+                                });
+                            }
+
+                            details.textContent = JSON.stringify({
+                                faceDetected: false,
+                                message: result.message,
+                                landmarks: result.landmarks ? 'Available' : 'None'
+                            }, null, 2);
+                        }
+                    },
+                    300 // Scan every 300ms
+                );
+            }
         }
 
         // Stop scanning

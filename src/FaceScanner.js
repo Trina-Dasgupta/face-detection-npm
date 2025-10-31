@@ -11,10 +11,15 @@ export class FaceScanner {
       detectionConfidence: 0.8,
       landmarkConfidence: 0.5,
       autoCaptureDelay: 1000,
+      // Do not reference node 'path' module at construction time (browser builds).
+      // Python is optional and enabled via `enablePython: true` when running in Node.
+      enablePython: false,
+      pythonPath: null,
       ...options
     };
     
     this.model = null;
+    this.analyzer = null;
     this.isInitialized = false;
     this.visibilityChecker = new FaceVisibilityChecker();
     this.captureTimeout = null;
@@ -86,6 +91,23 @@ export class FaceScanner {
         }
       );
       
+      // Initialize Python analyzer only when running in Node and when explicitly enabled.
+      // Avoid bundling python-shell into the browser build (python-shell uses node core modules).
+      if (this.options.enablePython && typeof window === 'undefined') {
+        try {
+          // Dynamically require at runtime using an indirect require to avoid static bundling by webpack
+          const PythonShell = eval('require')('python-shell').PythonShell;
+          const path = eval('require')('path');
+          this.analyzer = new PythonShell(path.join(__dirname, 'python', 'analyzer.py'), {
+            pythonPath: this.options.pythonPath,
+            mode: 'json'
+          });
+        } catch (err) {
+          console.warn('Python analyzer not available in this environment:', err && err.message);
+          this.analyzer = null;
+        }
+      }
+
       this.isInitialized = true;
       console.log('Face scanner initialized successfully');
       return true;
@@ -156,7 +178,7 @@ export class FaceScanner {
         }
       }
 
-  if (predictions.length === 0) {
+      if (predictions.length === 0) {
         return {
           faceDetected: false,
           message: 'No face detected',
@@ -165,11 +187,11 @@ export class FaceScanner {
         };
       }
 
-  // Normalize prediction to ensure downstream code has a consistent shape
-  let face = predictions[0];
-  face = this._normalizePrediction(face);
+      // Normalize prediction to ensure downstream code has a consistent shape
+      let face = predictions[0];
+      face = this._normalizePrediction(face);
 
-  const visibilityResult = this.visibilityChecker.checkFaceVisibility(face);
+      const visibilityResult = this.visibilityChecker.checkFaceVisibility(face);
 
       if (!visibilityResult.isVisible) {
         return {
@@ -196,6 +218,14 @@ export class FaceScanner {
       console.error('Error during face scanning:', error);
       throw error;
     }
+  }
+
+  async analyzeFace(base64Image) {
+    return new Promise((resolve, reject) => {
+        this.analyzer.send({ image: base64Image });
+        this.analyzer.once('message', resolve);
+        this.analyzer.once('error', reject);
+    });
   }
 
   async scanFaceContinuously(videoElement, callback, interval = 500) {
@@ -229,6 +259,10 @@ export class FaceScanner {
         this.model.close();
       }
       this.model = null;
+    }
+    if (this.analyzer) {
+      this.analyzer.end();
+      this.analyzer = null;
     }
     this.isInitialized = false;
   }
