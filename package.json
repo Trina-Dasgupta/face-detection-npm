@@ -1,0 +1,32 @@
+{
+  "name": "face-scanner-js",
+  "version": "1.0.0",
+  "description": "Advanced face scanner with facial landmark detection and visibility checking",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "webpack --mode=production",
+    "dev": "webpack --mode=development --watch",
+    "serve": "http-server -p 8000 -c-1"
+  },
+  "keywords": [
+    "face-detection",
+    "face-scanning",
+    "facial-landmarks",
+    "face-recognition",
+    "computer-vision"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "@tensorflow/tfjs": "^4.10.0",
+    "@tensorflow-models/face-landmarks-detection": "^1.0.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.22.0",
+    "@babel/preset-env": "^7.22.0",
+    "babel-loader": "^9.1.0",
+    "webpack": "^5.88.0",
+    "webpack-cli": "^5.1.0",
+    "http-server": "^14.1.1"
+  }
+}

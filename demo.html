@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Face Scanner JS - Working Demo</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        .video-container {
+            position: relative;
+            margin: 20px 0;
+        }
+        video, canvas {
+            width: 100%;
+            max-width: 640px;
+            border: 2px solid #333;
+            border-radius: 8px;
+            display: block;
+            margin: 0 auto;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            pointer-events: none;
+        }
+        #status {
+            padding: 15px;
+            border-radius: 5px;
+            font-weight: bold;
+            text-align: center;
+            margin: 10px 0;
+            min-height: 20px;
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+        }
+        .controls {
+            text-align: center;
+            margin: 20px 0;
+        }
+        button {
+            padding: 12px 24px;
+            font-size: 16px;
+            cursor: pointer;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            margin: 0 10px;
+            transition: background 0.3s;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        .details {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+            font-family: monospace;
+            font-size: 14px;
+            white-space: pre-wrap;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Face Scanner JS Demo</h1>
+        
+        <div class="video-container">
+            <video id="video" width="640" height="480" autoplay muted playsinline></video>
+            <canvas id="canvas" width="640" height="480"></canvas>
+        </div>
+        
+        <div id="status">Click "Start Camera" to begin</div>
+        
+        <div class="controls">
+            <button id="startBtn">Start Camera</button>
+            <button id="scanBtn" disabled>Start Scanning</button>
+            <button id="stopBtn" disabled>Stop Scanning</button>
+        </div>
+        
+        <div class="details" id="details">
+            Details will appear here...
+        </div>
+    </div>
+
+    <!-- Include TensorFlow.js and Face Landmarks Detection -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection@1.0.1/dist/face-landmarks-detection.min.js"></script>
+    
+    <!-- Include our built library -->
+    <script src="./dist/face-scanner-js.js"></script>
+    
+    <script>
+        // Global variables
+        let scanner = null;
+        let stopScanning = null;
+        let isScanning = false;
+
+        // DOM elements
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const status = document.getElementById('status');
+        const details = document.getElementById('details');
+        const startBtn = document.getElementById('startBtn');
+        const scanBtn = document.getElementById('scanBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const ctx = canvas.getContext('2d');
+
+        // Camera setup
+        async function setupCamera() {
+            try {
+                status.textContent = 'Requesting camera access...';
+                
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { 
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        facingMode: 'user'
+                    } 
+                });
+                
+                video.srcObject = stream;
+                
+                return new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        video.play();
+                        resolve();
+                    };
+                });
+            } catch (error) {
+                console.error('Camera error:', error);
+                status.textContent = 'Camera error: ' + error.message;
+                if (error.name === 'NotAllowedError') {
+                    status.textContent += '. Please allow camera access and reload the page.';
+                }
+                throw error;
+            }
+        }
+
+        // Initialize scanner
+        async function initializeScanner() {
+            try {
+                status.textContent = 'Loading face detection model...';
+                
+                // Use the global FaceScannerJS from our UMD build
+                scanner = new FaceScannerJS.FaceScanner({
+                    detectionConfidence: 0.8,
+                    landmarkConfidence: 0.6
+                });
+                
+                await scanner.initialize();
+                status.textContent = 'Face scanner ready! Click "Start Scanning"';
+                scanBtn.disabled = false;
+                
+            } catch (error) {
+                console.error('Scanner initialization error:', error);
+                status.textContent = 'Scanner error: ' + error.message;
+                throw error;
+            }
+        }
+
+        // Start scanning
+        async function startScanning() {
+            if (!scanner || isScanning) return;
+            
+            isScanning = true;
+            scanBtn.disabled = true;
+            stopBtn.disabled = false;
+            status.textContent = 'Scanning for faces...';
+            
+            stopScanning = await scanner.scanFaceContinuously(
+                video, 
+                (result) => {
+                    // Clear canvas
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    
+                    if (result.faceDetected) {
+                        status.textContent = '✅ ' + result.message;
+                        status.style.color = 'green';
+                        
+                        // Draw landmarks
+                        if (result.landmarks) {
+                            FaceScannerJS.ImageUtils.drawLandmarks(canvas, result.landmarks, {
+                                pointColor: '#00ff00',
+                                lineColor: '#ff00ff',
+                                pointSize: 2,
+                                lineWidth: 1
+                            });
+                        }
+                        
+                        // Update details
+                        details.textContent = JSON.stringify({
+                            faceDetected: true,
+                            visibilityScore: result.visibilityScore,
+                            boundingBox: result.boundingBox,
+                            imageData: result.base64Image ? 'Base64 image captured (' + result.base64Image.length + ' chars)' : 'No image'
+                        }, null, 2);
+                        
+                        console.log('Captured face image length:', result.base64Image?.length);
+                        
+                    } else {
+                        status.textContent = '❌ ' + result.message;
+                        status.style.color = 'red';
+                        
+                        // Draw landmarks even if not perfect for debugging
+                        if (result.landmarks) {
+                            FaceScannerJS.ImageUtils.drawLandmarks(canvas, result.landmarks, {
+                                pointColor: '#ff0000',
+                                lineColor: '#ff0000',
+                                pointSize: 1,
+                                lineWidth: 1
+                            });
+                        }
+                        
+                        details.textContent = JSON.stringify({
+                            faceDetected: false,
+                            message: result.message,
+                            landmarks: result.landmarks ? 'Available' : 'None'
+                        }, null, 2);
+                    }
+                },
+                300 // Scan every 300ms
+            );
+        }
+
+        // Stop scanning
+        function stopScanningFunc() {
+            if (stopScanning) {
+                stopScanning();
+                stopScanning = null;
+            }
+            isScanning = false;
+            scanBtn.disabled = false;
+            stopBtn.disabled = true;
+            status.textContent = 'Scanning stopped';
+            status.style.color = 'black';
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+
+        // Event listeners
+        startBtn.addEventListener('click', async () => {
+            try {
+                startBtn.disabled = true;
+                startBtn.textContent = 'Starting...';
+                
+                await setupCamera();
+                await initializeScanner();
+                
+                startBtn.style.display = 'none';
+                
+            } catch (error) {
+                console.error('Start failed:', error);
+                startBtn.disabled = false;
+                startBtn.textContent = 'Retry Start Camera';
+            }
+        });
+
+        scanBtn.addEventListener('click', startScanning);
+        stopBtn.addEventListener('click', stopScanningFunc);
+
+        // Cleanup
+        window.addEventListener('beforeunload', () => {
+            stopScanningFunc();
+            if (scanner) {
+                scanner.dispose();
+            }
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+            }
+        });
+
+        // Check for browser support
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            status.textContent = 'Error: Camera API not supported in this browser';
+            startBtn.disabled = true;
+        }
+
+        // Debug: Check if FaceScannerJS is available
+        console.log('FaceScannerJS available:', typeof FaceScannerJS !== 'undefined');
+        if (typeof FaceScannerJS !== 'undefined') {
+            console.log('FaceScannerJS contents:', Object.keys(FaceScannerJS));
+        }
+    </script>
+</body>
+</html>
